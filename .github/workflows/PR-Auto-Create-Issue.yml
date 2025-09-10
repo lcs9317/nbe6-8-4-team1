@@ -57,56 +57,80 @@ jobs:
               return (m ? m[1].trim() : '');
             };
 
-            // ---------- (교체) 자동 생성 이슈 바디 렌더러 ----------
-            // ※ 다른 로직/호출부 변경 없음. 시그니처 그대로 유지( TYPE, SUBJECT, prNumber ).
+
+            const stripBullets = (txt) =>
+              (txt || '').replace(/^\s*[-*]\s+/gm, '').trim();
+            
+            const ensureTaskList = (txt) => {
+              const lines = (txt || '').split('\n').map(l => {
+                // 이미 체크박스면 그대로
+                if (/^\s*-\s+\[[ xX]\]\s+/.test(l)) return l;
+                // 일반 목록이면 체크박스로 승격
+                if (/^\s*[-*]\s+/.test(l)) return l.replace(/^\s*[-*]\s+/, '- [ ] ');
+                return l;
+              });
+              return lines.join('\n').trim();
+            };
+
+            
             const renderIssueFormBody = (TYPE, SUBJECT, prNumber) => {
               const body = (context.payload.pull_request.body || "");
-              const whatWhy   = section(body, "무엇을 / 왜") || "- **무엇(What)**:\n- **왜(Why)**:";
-              const how       = section(body, "어떻게(요약) — 3줄 이내") || "-";
-              const impact    = section(body, "영향 범위") || [
+            
+              // 섹션 추출은 기존 section() 유틸 그대로 사용한다고 가정
+              const wwRaw   = section(body, "무엇을 / 왜");
+              const howRaw  = section(body, "어떻게(요약) — 3줄 이내");
+              const impRaw  = section(body, "영향 범위");
+              const chkRaw  = section(body, "체크리스트");
+              const todoRaw = section(body, "ToDo (선택)");
+              const prfRaw  = section(body, "스크린샷/증빙(선택)");
+            
+              // 들여쓰기 통일: 문단 vs 체크박스
+              const whatWhy   = stripBullets(wwRaw)  || "**무엇(What)**:\n**왜(Why)**:";
+              const how       = stripBullets(howRaw) || "-";
+              const impact    = ensureTaskList(impRaw) || [
                 "- [ ] **API 변경**",
                 "- [ ] **DB 마이그레이션**",
                 "- [ ] **Breaking Change**",
                 "- [ ] **보안/권한 영향**",
                 "- [ ] 문서/가이드 업데이트 필요"
               ].join("\n");
-              const checklist = section(body, "체크리스트") || [
+              const checklist = ensureTaskList(chkRaw) || [
                 "- [ ] 타입 라벨 부착 (FEAT/FIX/REFACTOR/COMMENT/STYLE/TEST/CHORE/INIT)",
                 "- [ ] 로컬/CI 테스트 통과",
                 "- [ ] 영향도 점검 완료",
                 "- [ ] 주석/문서 반영(필요 시)"
               ].join("\n");
-              const todo      = section(body, "ToDo (선택)") || [
+              const todo = ensureTaskList(todoRaw) || [
                 "- [ ] 할 일 1",
                 "- [ ] 할 일 2"
               ].join("\n");
-              const proofs    = section(body, "스크린샷/증빙(선택)") || "";
-
+              const proofs = (prfRaw || "").trim();
+            
               return `**변경 유형 (Type):** ${TYPE}
-              **제목(Subject):** ${SUBJECT}
-              
-              ## 무엇을 / 왜
-              ${whatWhy}
-              
-              ## 어떻게(요약) — 3줄 이내
-              ${how}
-              
-              ## 영향 범위
-              ${impact}
-              
-              ## 체크리스트
-              ${checklist}
-              
-              ## ToDo (선택)
-              ${todo}
-              
-              ## 스크린샷/증빙(선택)
-              ${proofs}
-              
-              ---
-              Auto-created for PR #${prNumber}
-              <!-- auto-issue-for-pr:${prNumber} -->
-              <!-- auto-issue-uses-form:Issue -->`;
+            **제목(Subject):** ${SUBJECT}
+            
+            ## 무엇을 / 왜
+            ${whatWhy}
+            
+            ## 어떻게(요약) — 3줄 이내
+            ${how}
+            
+            ## 영향 범위
+            ${impact}
+            
+            ## 체크리스트
+            ${checklist}
+            
+            ## ToDo (선택)
+            ${todo}
+            
+            ## 스크린샷/증빙(선택)
+            ${proofs}
+            
+            ---
+            Auto-created for PR #${prNumber}
+            <!-- auto-issue-for-pr:${prNumber} -->
+            <!-- auto-issue-uses-form:Issue -->`;
             };
 
             const normalize = (s) => (s || "").replace(/\r\n/g, "\n").replace(/[ \t]+$/gm, "").replace(/\n+$/,"");
