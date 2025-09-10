@@ -46,31 +46,68 @@ jobs:
             const pr    = context.payload.pull_request;
             const owner = context.repo.owner;
             const repo  = context.repo.repo;
-            const renderIssueFormBody = (TYPE, SUBJECT, prNumber) => `<!-- form:Issue v1 -->
-            **변경 유형 (Type):** ${TYPE}
-            **제목(Subject):** ${SUBJECT}
-            
-            ### 무엇을 / 왜
-            - 무엇(What):
-            - 왜(Why):
-            
-            ### 상세 설명(필요 시)
-            한 줄당 100자 내외. 필요 시만 작성.
-            
-            ### ToDoList
-            - [ ] 할 일 1
-            - [ ] 할 일 2
-            
-            ### 비고(스크린샷/참고자료)
-            스크린샷, 로그, 링크 등
-            
-            ---
-            Auto-created for PR #${prNumber}
-            <!-- auto-issue-for-pr:${prNumber} -->
-            <!-- auto-issue-uses-form:Issue -->`;
-            
 
+            // ---------- (추가) PR 템플릿 전용 파서 유틸 ----------
+            const escapeRe = (s) => (s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            // "## <header>" ~ 다음 "## " 전까지를 추출
+            const section = (md, headerText) => {
+              const h  = escapeRe(headerText);
+              const re = new RegExp(`^##\\s*${h}\\s*[\\r\\n]+([\\s\\S]*?)(?=^##\\s|\\Z)`, 'mi');
+              const m  = (md || '').match(re);
+              return (m ? m[1].trim() : '');
+            };
 
+            // ---------- (교체) 자동 생성 이슈 바디 렌더러 ----------
+            // ※ 다른 로직/호출부 변경 없음. 시그니처 그대로 유지( TYPE, SUBJECT, prNumber ).
+            const renderIssueFormBody = (TYPE, SUBJECT, prNumber) => {
+              const body = (context.payload.pull_request.body || "");
+              const whatWhy   = section(body, "무엇을 / 왜") || "- **무엇(What)**:\n- **왜(Why)**:";
+              const how       = section(body, "어떻게(요약) — 3줄 이내") || "-";
+              const impact    = section(body, "영향 범위") || [
+                "- [ ] **API 변경**",
+                "- [ ] **DB 마이그레이션**",
+                "- [ ] **Breaking Change**",
+                "- [ ] **보안/권한 영향**",
+                "- [ ] 문서/가이드 업데이트 필요"
+              ].join("\n");
+              const checklist = section(body, "체크리스트") || [
+                "- [ ] 타입 라벨 부착 (FEAT/FIX/REFACTOR/COMMENT/STYLE/TEST/CHORE/INIT)",
+                "- [ ] 로컬/CI 테스트 통과",
+                "- [ ] 영향도 점검 완료",
+                "- [ ] 주석/문서 반영(필요 시)"
+              ].join("\n");
+              const todo      = section(body, "ToDo (선택)") || [
+                "- [ ] 할 일 1",
+                "- [ ] 할 일 2"
+              ].join("\n");
+              const proofs    = section(body, "스크린샷/증빙(선택)") || "";
+
+              return `**변경 유형 (Type):** ${TYPE}
+              **제목(Subject):** ${SUBJECT}
+              
+              ## 무엇을 / 왜
+              ${whatWhy}
+              
+              ## 어떻게(요약) — 3줄 이내
+              ${how}
+              
+              ## 영향 범위
+              ${impact}
+              
+              ## 체크리스트
+              ${checklist}
+              
+              ## ToDo (선택)
+              ${todo}
+              
+              ## 스크린샷/증빙(선택)
+              ${proofs}
+              
+              ---
+              Auto-created for PR #${prNumber}
+              <!-- auto-issue-for-pr:${prNumber} -->
+              <!-- auto-issue-uses-form:Issue -->`;
+            };
 
             const normalize = (s) => (s || "").replace(/\r\n/g, "\n").replace(/[ \t]+$/gm, "").replace(/\n+$/,"");
             const stripForScan = (s) => (s || "").replace(/```[\s\S]*?```/g, "").replace(/`[^`]*`/g, "");
