@@ -46,6 +46,31 @@ jobs:
             const pr    = context.payload.pull_request;
             const owner = context.repo.owner;
             const repo  = context.repo.repo;
+            const renderIssueFormBody = (TYPE, SUBJECT, prNumber) => `<!-- form:Issue v1 -->
+            **변경 유형 (Type):** ${TYPE}
+            **제목(Subject):** ${SUBJECT}
+            
+            ### 무엇을 / 왜
+            - 무엇(What):
+            - 왜(Why):
+            
+            ### 상세 설명(필요 시)
+            한 줄당 100자 내외. 필요 시만 작성.
+            
+            ### ToDoList
+            - [ ] 할 일 1
+            - [ ] 할 일 2
+            
+            ### 비고(스크린샷/참고자료)
+            스크린샷, 로그, 링크 등
+            
+            ---
+            Auto-created for PR #${prNumber}
+            <!-- auto-issue-for-pr:${prNumber} -->
+            <!-- auto-issue-uses-form:Issue -->`;
+            
+
+
 
             const normalize = (s) => (s || "").replace(/\r\n/g, "\n").replace(/[ \t]+$/gm, "").replace(/\n+$/,"");
             const stripForScan = (s) => (s || "").replace(/```[\s\S]*?```/g, "").replace(/`[^`]*`/g, "");
@@ -102,7 +127,7 @@ jobs:
               const created = await github.rest.issues.create({
                 owner, repo,
                 title: `[${TYPE}]: ${SUBJECT}`,
-                body: `### 변경 유형 (Type)\n${TYPE}\n\n### 제목(Subject)\n${SUBJECT}\n\n---\nAuto-created for PR #${pr.number}\n<!-- auto-issue-for-pr:${pr.number} -->`,
+                body: renderIssueFormBody(TYPE, SUBJECT, pr.number),
                 labels: ["auto", "needs-triage", TYPE]
               });
               issueNumber = created.data.number;
