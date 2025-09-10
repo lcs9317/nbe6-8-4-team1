@@ -11,7 +11,7 @@ permissions:
 
 env:
   PROJECT_OWNER: lcs9317
-  PROJECT_NUMBER: 1
+  PROJECT_NUMBER: 3
 
 jobs:
   done:
