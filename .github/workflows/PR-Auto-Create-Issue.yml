@@ -29,12 +29,19 @@ jobs:
             const pr    = context.payload.pull_request;
             const owner = context.repo.owner;
             const repo  = context.repo.repo;
-            const hasManualClose = /\b(?:close[sd]?|fixe?[sd]?|resolve[sd]?)\s*:?\s*#\d+\b/i.test(pr.body || "");
+            const stripForScan = (s) =>
+              (s || "")
+                .replace(/<!--[\s\S]*?-->/g, "")
+                .replace(/```[\s\S]*?```/g, "")
+                .replace(/`[^`]*`/g, "");
+            
+            const scanBody = stripForScan(pr.body || "");
+            const hasManualClose = /\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\b\s*[:\-–]?\s*#\d+\b/i.test(scanBody);
+            
             if (hasManualClose) {
               core.info("Manual close reference detected → skip auto-issue creation/update.");
               return;
             }
-
             // ---------------- helpers ----------------
             const closeRe     = /\b(?:close[sd]?|fixe?[sd]?|resolve[sd]?)\s+#(\d+)\b/i;
             const prMarkerRe  = /<!--\s*auto-linked-issue:(\d+)\s*-->/;
