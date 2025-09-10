@@ -1,8 +1,9 @@
-name: PR → Title Check + Auto-link/Auto-create Issue (project-ensure)
+name: PR → Title Check + Auto-create/update linked Issue (project-ensure)
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened]   # edited 제거(중복 실행 방지)
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -10,8 +11,8 @@ permissions:
   issues: write
 
 env:
-  PROJECT_OWNER: lcs9317
-  PROJECT_NUMBER: 3
+  PROJECT_OWNER: prgrms-be-devcourse
+  PROJECT_NUMBER: 269
 
 concurrency:
   group: pr-auto-issue-${{ github.event.pull_request.number }}
@@ -38,7 +39,7 @@ jobs:
               if (len < 1 || len > 50) core.setFailed(`제목(Subject)은 1~50자 이내여야 합니다. 현재 ${len}자`);
             }
 
-      - name: Link or create issue + ensure project
+      - name: Create or update an issue from PR and link back (idempotent)
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.PROJECTS_TOKEN }}
@@ -47,108 +48,158 @@ jobs:
             const owner = context.repo.owner;
             const repo  = context.repo.repo;
 
-            const normalize = (s) => (s || "").replace(/\r\n/g, "\n").replace(/[ \t]+$/gm, "").replace(/\n+$/,"");
-            const stripForScan = (s) => (s || "").replace(/```[\s\S]*?```/g, "").replace(/`[^`]*`/g, "");
+            const hasClosingFor = (body, n) =>
+              new RegExp(`\\b(?:close[sd]?|fixe?[sd]?|resolve[sd]?)\\s+#${n}\\b`, 'i').test(body || '');
+
+            const addOrReplaceAutoLink = (body, n) => {
+              const prMarkerRe = /<!--\s*auto-linked-issue:\d+\s*-->/;
+              const stripped = (body || '')
+                .replace(/\b(?:close[sd]?|fixe?[sd]?|resolve[sd]?)\s+#\d+\b/gi, '')
+                .replace(prMarkerRe, '')
+                .trim();
+              return `${stripped}\n\nCloses #${n}\n<!-- auto-linked-issue:${n} -->`.trim();
+            };
+
             const ensureLabels = async (names) => {
               for (const name of names) {
                 try { await github.rest.issues.getLabel({ owner, repo, name }); }
                 catch { await github.rest.issues.createLabel({ owner, repo, name, color: "ededed" }); }
               }
             };
-            const appendCloseAndMarkerIfNeeded = (body, n) => {
-              let out = body || "";
-              const hasClose = new RegExp(`\\b(?:close[sd]?|fixe?[sd]?|resolve[sd]?)\\b\\s*[:\\-–]?\\s*#${n}\\b`, 'i').test(out);
-              const hasMark  = new RegExp(`<!--\\s*auto-linked-issue:${n}\\s*-->`).test(out);
-              if (!hasClose) out += `\n\nCloses #${n}`;
-              if (!hasMark)  out += `\n<!-- auto-linked-issue:${n} -->`;
-              return out;
+
+            const body0 = pr.body || "";
+            const grab = (patterns) => {
+              for (const p of patterns) {
+                const re = new RegExp(`^##\\s*${p}(?:[^\\n]*)?\\n([\\s\\S]*?)(?=^##\\s|\\Z)`, 'mi');
+                const m = body0.match(re);
+                if (m) return m[1].trim();
+              }
+              return "";
             };
+
+            const WHATWHY   = grab(["무엇을\\s*/\\s*왜"]);
+            const DETAILS   = grab(["어떻게\\(요약\\)", "핵심 변경점 요약"]);
+            const IMPACT    = grab(["영향 범위"]);
+            const CHECKLIST = grab(["체크리스트"]);
+            const PROOF     = grab(["스크린샷/증빙\\(선택\\)", "스크린샷/증빙\\(필요 시\\)", "스크린샷/증빙"]);
 
             const typeMatch = (pr.title || "").match(/^\s*\[(FEAT|FIX|REFACTOR|COMMENT|STYLE|TEST|CHORE|INIT)\]\s*:\s*/i);
             const TYPE     = (typeMatch ? typeMatch[1] : "CHORE").toUpperCase();
             const SUBJECT  = (pr.title || "").replace(/^\s*\[[^\]]+\]\s*:\s*/,'').trim() || `PR #${pr.number}`;
-            const FULL     = pr.title || "";
 
-            const rawBody  = pr.body || "";
-            const scanBody = stripForScan(rawBody);
-            const autoLinkedNums = [...rawBody.matchAll(/<!--\s*auto-linked-issue:(\d+)\s*-->/g)].map(m => Number(m[1]));
-            const closeRefs = [...scanBody.matchAll(/\b(?:close[sd]?|fixe?[sd]?|resolve[sd]?)\b\s*[:\-–]?\s*#(\d+)\b/ig)].map(m => Number(m[1]));
-            const manualCloseNumbers = closeRefs.filter(n => !autoLinkedNums.includes(n));
-            const hasManualClose = manualCloseNumbers.length > 0;
-
-            let issueNumber = null;
-            let mode = null; // 'manual' | 'auto-existing' | 'auto-created'
-
-            if (hasManualClose) {
-              const n = manualCloseNumbers[0];
-              try { await github.rest.issues.get({ owner, repo, issue_number: n }); issueNumber = n; mode = 'manual'; } catch {}
+            const prMarkerRe = /<!--\s*auto-linked-issue:(\d+)\s*-->/;
+            let linkedIssueNo = null;
+            const mm = body0.match(prMarkerRe);
+            if (mm) {
+              const n = Number(mm[1]);
+              try { await github.rest.issues.get({ owner, repo, issue_number: n }); linkedIssueNo = n; } catch {}
             }
 
-            if (!issueNumber) {
-              const q = `repo:${owner}/${repo} is:issue is:open in:title "${FULL.replace(/"/g,'\\"')}"`;
-              const res = await github.request('GET /search/issues', { q, per_page: 1, advanced_search: true, headers: { 'X-GitHub-Api-Version': '2022-11-28' } });
-              if (res.data.items.length === 1) { issueNumber = res.data.items[0].number; mode = 'manual'; }
+            if (!linkedIssueNo) {
+              const q = `repo:${owner}/${repo} is:issue is:open in:body "Auto-created for PR #${pr.number}" label:auto`;
+              const found = await github.request('GET /search/issues', {
+                q, per_page: 1, advanced_search: true,
+                headers: { 'X-GitHub-Api-Version': '2022-11-28' }
+              });
+              if (found.data.items.length > 0) linkedIssueNo = found.data.items[0].number;
             }
 
-            if (!issueNumber) {
-              const q = `repo:${owner}/${repo} is:issue is:open in:body "auto-issue-for-pr:${pr.number}" label:auto`;
-              const r = await github.request('GET /search/issues', { q, per_page: 1, advanced_search: true, headers: { 'X-GitHub-Api-Version': '2022-11-28' } });
-              if (r.data.items.length > 0) { issueNumber = r.data.items[0].number; mode = 'auto-existing'; }
+            if (!linkedIssueNo) {
+              const t = `[${TYPE}]: ${SUBJECT}`.replace(/"/g, '\\"');
+              const q = `repo:${owner}/${repo} is:issue is:open in:title "${t}" label:auto`;
+              const foundByTitle = await github.request('GET /search/issues', {
+                q, per_page: 1, advanced_search: true,
+                headers: { 'X-GitHub-Api-Version': '2022-11-28' }
+              });
+              if (foundByTitle.data.items.length === 1) linkedIssueNo = foundByTitle.data.items[0].number;
             }
 
-            if (!issueNumber && !hasManualClose) {
-              mode = 'auto-created';
-              await ensureLabels(["auto", "needs-triage", TYPE]);
+            const issueTitle = `[${TYPE}]: ${SUBJECT}`;
+            const issueBody = [
+              `### 변경 유형 (Type)`,
+              TYPE || "_(미입력)_",
+              ``,
+              `### 제목(Subject)`,
+              SUBJECT || "_(미입력)_",
+              ``,
+              `### 무엇을 / 왜`,
+              WHATWHY || "_(PR 본문에 항목 없음)_",
+              ``,
+              `### 상세 설명(필요 시)`,
+              DETAILS || "_(생략)_",
+              ``,
+              `### ToDoList`,
+              (CHECKLIST && CHECKLIST.trim()) || "- [ ] (작성 필요)",
+              ``,
+              `### 비고(스크린샷/참고자료)`,
+              PROOF || "_(생략)_",
+              ``,
+              `---`,
+              `Auto-created for PR #${pr.number}`,
+              `<!-- auto-issue-for-pr:${pr.number} -->`
+            ].join("\n");
+
+            await ensureLabels(["auto", "needs-triage", TYPE]);
+
+            let issueNumber;
+            if (linkedIssueNo) {
+              issueNumber = linkedIssueNo;
+              await github.rest.issues.update({
+                owner, repo, issue_number: issueNumber,
+                title: issueTitle, body: issueBody, labels: ["auto", "needs-triage", TYPE]
+              });
+            } else {
               const created = await github.rest.issues.create({
-                owner, repo,
-                title: `[${TYPE}]: ${SUBJECT}`,
-                body: `### 변경 유형 (Type)\n${TYPE}\n\n### 제목(Subject)\n${SUBJECT}\n\n---\nAuto-created for PR #${pr.number}\n<!-- auto-issue-for-pr:${pr.number} -->`,
-                labels: ["auto", "needs-triage", TYPE]
+                owner, repo, title: issueTitle, body: issueBody, labels: ["auto", "needs-triage", TYPE]
               });
               issueNumber = created.data.number;
             }
 
-            if (issueNumber) {
-              const body0 = pr.body || "";
-              const desired = appendCloseAndMarkerIfNeeded(body0, issueNumber);
-              if (normalize(desired) !== normalize(body0)) {
-                await github.rest.pulls.update({ owner, repo, pull_number: pr.number, body: desired });
-              }
+            const current = pr.body || "";
+            if (!hasClosingFor(current, issueNumber) || !prMarkerRe.test(current)) {
+              const updated = addOrReplaceAutoLink(current, issueNumber);
+              await github.rest.pulls.update({ owner, repo, pull_number: pr.number, body: updated });
             }
 
             try {
               const author = pr?.user?.login;
               if (author) {
-                try { await github.rest.issues.addAssignees({ owner, repo, issue_number: pr.number, assignees: [author] }); } catch {}
-                if (mode && mode.startsWith('auto') && issueNumber) {
-                  try { await github.rest.issues.addAssignees({ owner, repo, issue_number: issueNumber, assignees: [author] }); } catch {}
-                }
+                try { await github.rest.issues.addAssignees({ owner, repo, issue_number: issueNumber, assignees: [author] }); } catch {}
+                try { await github.rest.issues.addAssignees({ owner, repo, issue_number: pr.number,    assignees: [author] }); } catch {}
               }
             } catch {}
 
             try {
               const login  = process.env.PROJECT_OWNER || context.repo.owner;
               const number = Number(process.env.PROJECT_NUMBER || 1);
+
               let projectId = null;
               try {
-                const r = await github.graphql(`query($login:String!,$number:Int!){ organization(login:$login){ projectV2(number:$number){ id } } }`, { login, number });
+                const r = await github.graphql(
+                  `query($login:String!,$number:Int!){
+                    organization(login:$login){ projectV2(number:$number){ id } }
+                  }`, { login, number }
+                );
                 projectId = r?.organization?.projectV2?.id || null;
               } catch {}
               if (!projectId) {
                 try {
-                  const r2 = await github.graphql(`query($login:String!,$number:Int!){ user(login:$login){ projectV2(number:$number){ id } } }`, { login, number });
+                  const r2 = await github.graphql(
+                    `query($login:String!,$number:Int!){
+                      user(login:$login){ projectV2(number:$number){ id } }
+                    }`, { login, number }
+                  );
                   projectId = r2?.user?.projectV2?.id || null;
                 } catch {}
               }
               if (!projectId) return;
 
-              const prResp = await github.rest.pulls.get({ owner, repo, pull_number: pr.number });
-              const prNodeId = prResp.data.node_id;
-              let issueNodeId = null;
-              if (issueNumber) {
-                const iss = await github.rest.issues.get({ owner, repo, issue_number: issueNumber });
-                issueNodeId = iss.data.node_id;
-              }
+              const [iss, prr] = await Promise.all([
+                github.rest.issues.get({ owner, repo, issue_number: issueNumber }),
+                github.rest.pulls.get({ owner, repo, pull_number: pr.number })
+              ]);
+              const issueNodeId = iss.data.node_id;
+              const prNodeId    = prr.data.node_id;
 
               const listQ = `
                 query($projectId:ID!, $after:String) {
@@ -163,10 +214,11 @@ jobs:
                 }`;
               const addM = `
                 mutation($projectId:ID!, $contentId:ID!) {
-                  addProjectV2ItemById(input:{projectId:$projectId, contentId:$contentId}) { item { id } }
+                  addProjectV2ItemById(input:{projectId:$projectId, contentId:$contentId}) {
+                    item { id }
+                  }
                 }`;
               const addIfMissing = async (contentId) => {
-                if (!contentId) return null;
                 let cursor = null, found = null;
                 while (true) {
                   const r = await github.graphql(listQ, { projectId, after: cursor });
@@ -179,9 +231,8 @@ jobs:
                 const a = await github.graphql(addM, { projectId, contentId });
                 return a?.addProjectV2ItemById?.item?.id || null;
               };
-
-              const prItemId    = await addIfMissing(prNodeId);
               const issueItemId = await addIfMissing(issueNodeId);
+              const prItemId    = await addIfMissing(prNodeId);
 
               const fieldsQ = `
                 query($projectId:ID!) {
@@ -199,45 +250,21 @@ jobs:
               const fr = await github.graphql(fieldsQ, { projectId });
               const fields = fr?.node?.fields?.nodes || [];
               const statusField = fields.find(f => f.name === "Status" && f.options);
-
               const desiredStatus = pr.draft ? "Ready" : "In progress";
               if (statusField) {
                 const opt = statusField.options.find(o => o.name === desiredStatus);
                 if (opt) {
                   const setM = `
                     mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $optId:String!) {
-                      updateProjectV2ItemFieldValue(input:{ projectId:$projectId, itemId:$itemId, fieldId:$fieldId, value:{ singleSelectOptionId:$optId } }) { projectV2Item { id } }
+                      updateProjectV2ItemFieldValue(input:{
+                        projectId:$projectId, itemId:$itemId, fieldId:$fieldId,
+                        value:{ singleSelectOptionId:$optId }
+                      }) { projectV2Item { id } }
                     }`;
-                  if (prItemId)    await github.graphql(setM, { projectId, itemId: prItemId,    fieldId: statusField.id, optId: opt.id });
                   if (issueItemId) await github.graphql(setM, { projectId, itemId: issueItemId, fieldId: statusField.id, optId: opt.id });
+                  if (prItemId)    await github.graphql(setM, { projectId, itemId: prItemId,    fieldId: statusField.id, optId: opt.id });
                 }
               }
-
-              const startFieldName = "Start date";
-              const startDate = (pr.created_at || new Date().toISOString()).substring(0,10);
-
-              const getDateFieldValue = async (itemId, fieldName) => {
-                if (!itemId) return null;
-                const q = `
-                  query($itemId:ID!) {
-                    node(id:$itemId) {
-                      ... on ProjectV2Item {
-                        fieldValues(first:50) {
-                          nodes {
-                            ... on ProjectV2ItemFieldDateValue {
-                              date
-                              field { ... on ProjectV2FieldCommon { id name } }
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }`;
-                const r = await github.graphql(q, { itemId });
-                const nodes = r?.node?.fieldValues?.nodes || [];
-                const hit = nodes.find(n => n?.field?.name === fieldName);
-                return hit?.date || null;
-              };
 
               const fieldsQ2 = `
                 query($projectId:ID!) {
@@ -249,23 +276,16 @@ jobs:
                 }`;
               const fr2 = await github.graphql(fieldsQ2, { projectId });
               const fields2 = fr2?.node?.fields?.nodes || [];
-              const startField = fields2.find(f => f.name === startFieldName && f.dataType === "DATE");
-              const startFieldId = startField?.id || null;
-
+              const startFieldId = fields2.find(f => f.name === "Start date" && f.dataType === "DATE")?.id;
+              const startDate = (pr.created_at || new Date().toISOString()).substring(0,10);
               const setDateM = `
                 mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $d:Date!) {
                   updateProjectV2ItemFieldValue(input:{ projectId:$projectId, itemId:$itemId, fieldId:$fieldId, value:{ date:$d } }) { projectV2Item { id } }
                 }`;
-
-              const setStartIfEmpty = async (itemId) => {
+              const setStart = async (itemId) => {
                 if (!itemId || !startFieldId) return;
-                const existing = await getDateFieldValue(itemId, startFieldName);
-                if (existing) return;
                 await github.graphql(setDateM, { projectId, itemId, fieldId: startFieldId, d: startDate });
               };
-
-              await setStartIfEmpty(prItemId);
-              await setStartIfEmpty(issueItemId);
-            } catch (e) {
-              core.warning(`Project ensure failed: ${e?.message || e}`);
-            }
+              await setStart(issueItemId);
+              await setStart(prItemId);
+            } catch (e) {}
