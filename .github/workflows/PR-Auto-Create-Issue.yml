@@ -29,6 +29,11 @@ jobs:
             const pr    = context.payload.pull_request;
             const owner = context.repo.owner;
             const repo  = context.repo.repo;
+            const hasManualClose = /\b(?:close[sd]?|fixe?[sd]?|resolve[sd]?)\s*:?\s*#\d+\b/i.test(pr.body || "");
+            if (hasManualClose) {
+              core.info("Manual close reference detected → skip auto-issue creation/update.");
+              return;
+            }
 
             // ---------------- helpers ----------------
             const closeRe     = /\b(?:close[sd]?|fixe?[sd]?|resolve[sd]?)\s+#(\d+)\b/i;
