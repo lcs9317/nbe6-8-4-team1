@@ -10,8 +10,8 @@ permissions:
   issues: read
 
 env:
-  PROJECT_OWNER: prgrms-be-devcourse
-  PROJECT_NUMBER: 269
+  PROJECT_OWNER: lcs9317
+  PROJECT_NUMBER: 1
 
 jobs:
   done:
