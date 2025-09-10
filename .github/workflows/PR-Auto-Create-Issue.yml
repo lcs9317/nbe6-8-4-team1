@@ -2,7 +2,7 @@ name: PR → Title Check + Auto-link/Auto-create Issue (project-ensure)
 
 on:
   pull_request:
-    types: [opened, edited, synchronize, reopened]
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
